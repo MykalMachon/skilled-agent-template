@@ -223,10 +223,10 @@ const agent = new Agent({
 	system: await buildPrompt(),
 	prepareStep: async ({ messages }) => {
 		// Keep only recent messages to stay within context limits
-		if (messages.length > 15) {
+		if (messages.length > 8) {
 			const filteredMessages = [
 				messages[0], // Keep system message
-				...messages.slice(-10), // Keep last 10 messages
+				...messages.slice(-8), // Keep last 8 messages
 				// vvv shoutout the internet for this one vvv
 			].filter((msg): msg is NonNullable<typeof msg> => msg !== undefined);
 			return {
