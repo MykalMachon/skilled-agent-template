@@ -202,10 +202,12 @@ async function streamAgentResponse(prompt: string) {
 	// Stream and display the text output
 	let assistantResponse = '';
 	process.stdout.write(`${agentLabel} `);
+
 	for await (const textPart of textStream) {
 		process.stdout.write(textPart);
 		assistantResponse += textPart;
 	}
+
 	console.log('\n');
 
 	await toolMonitor;
