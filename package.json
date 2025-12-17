@@ -1,0 +1,26 @@
+{
+	"name": "skilled-agent-template",
+	"module": "index.ts",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"start": "bun ./index.ts",
+		"dev": "bun --watch ./index.ts",
+		"build": "bun build ./index.ts --compile --outfile agent",
+		"typecheck": "tsc --noEmit",
+		"lint": "bun lint",
+		"lint:fix": "bun lint:fix"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	},
+	"dependencies": {
+		"@ai-sdk/anthropic": "^2.0.56",
+		"ai": "^5.0.114",
+		"gray-matter": "^4.0.3",
+		"zod": "^4.2.1"
+	}
+}
