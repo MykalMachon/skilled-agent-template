@@ -1,11 +1,29 @@
 import { anthropic } from '@ai-sdk/anthropic';
+import { ollama } from 'ollama-ai-provider-v2';
 import { Experimental_Agent as Agent, stepCountIs } from 'ai';
+import type { AssistantModelMessage, UserModelMessage } from 'ai';
 import matter from 'gray-matter';
 import { z } from 'zod';
 
 import { readdir } from 'node:fs/promises';
 
 const SKILLS_PATH = `${import.meta.dir}/skills`;
+
+// ? MODEL PROVIDER CONFIGURATION
+const MODEL_PROVIDER = (Bun.env.MODEL_PROVIDER || 'anthropic') as 'anthropic' | 'ollama';
+const MODEL_NAME = Bun.env.MODEL_NAME || (MODEL_PROVIDER === 'anthropic' ? 'claude-haiku-4-5' : 'ministral-3:8b');
+
+// Create the model instance based on the provider
+const getModel = () => {
+	switch (MODEL_PROVIDER) {
+		case 'anthropic':
+			return anthropic(MODEL_NAME);
+		case 'ollama':
+			return ollama(MODEL_NAME);
+		default:
+			throw new Error(`Unknown model provider: ${MODEL_PROVIDER}`);
+	}
+};
 
 
 // ? SYSTEM PROMPT CREATION
@@ -153,8 +171,19 @@ const compact = (obj: any, maxLen = 80): string => {
 	return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '...' : oneLine;
 };
 
+// Track conversation history
+const conversationHistory: Array<UserModelMessage | AssistantModelMessage> = [];
+
 async function streamAgentResponse(prompt: string) {
-	const { textStream, fullStream } = agent.stream({ prompt });
+	// Add user message to history
+	conversationHistory.push({
+		role: 'user',
+		content: prompt
+	});
+
+	const { textStream, fullStream } = agent.stream({
+		messages: conversationHistory
+	});
 
 	// Display tool calls and results as they happen
 	const toolMonitor = (async () => {
@@ -171,19 +200,41 @@ async function streamAgentResponse(prompt: string) {
 	})();
 
 	// Stream and display the text output
+	let assistantResponse = '';
 	process.stdout.write(`${agentLabel} `);
 	for await (const textPart of textStream) {
 		process.stdout.write(textPart);
+		assistantResponse += textPart;
 	}
 	console.log('\n');
 
 	await toolMonitor;
+
+	// Add assistant response to history
+	conversationHistory.push({
+		role: 'assistant',
+		content: assistantResponse
+	});
 }
 
 // * init agent
 const agent = new Agent({
-	model: anthropic('claude-haiku-4-5'),
+	model: getModel(),
 	system: await buildPrompt(),
+	prepareStep: async ({ messages }) => {
+		// Keep only recent messages to stay within context limits
+		if (messages.length > 15) {
+			const filteredMessages = [
+				messages[0], // Keep system message
+				...messages.slice(-10), // Keep last 10 messages
+				// vvv shoutout the internet for this one vvv
+			].filter((msg): msg is NonNullable<typeof msg> => msg !== undefined);
+			return {
+				messages: filteredMessages,
+			};
+		}
+		return {};
+	},
 	tools: {
 		runScript: runScriptTool,
 		listDirectory: listDirectoryTool,
