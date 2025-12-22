@@ -32,7 +32,10 @@ const getModel = () => {
 interface SkillPreview {
 	name: string;
 	description: string;
-	allowedTools: string[];
+	allowedTools?: string[];
+	license?: string;
+	compatibility?: string;
+	metadata?: Record<string, any>;
 }
 
 const buildSkillsListMd = async () => {
@@ -58,6 +61,7 @@ const buildSkillsListMd = async () => {
 }
 
 const buildPrompt = async () => {
+	const skillsList = await buildSkillsListMd();
 	return `
 # Skilled Agent
 
@@ -68,12 +72,23 @@ You are a skilled agent that can learn using skills that are just a bunch of mar
 You are being used for serious work, so try and be both serious and concise in your responses.
 Use only simple markdown. currently your output is displayed in a terminal ui.
 
-## Skills
+## Skills Usage Pattern
 
-You have access to these skill documents: 
-${await buildSkillsListMd()}
+1. **Discover**: When you receive a user request, first think about which skills might be relevant
+2. **Read**: Always read the full SKILL.md document before using a skill
+3. **Execute**: Use the tools provided by the skill to accomplish the task
+4. **Verify**: Check the results and provide feedback to the user
 
-skill documents contain specialized instructions. If you're using a skill ALWAYS read the skill document (SKILL.md) first.
+## Available Skills
+
+${skillsList || 'No skills available currently.'}
+
+## Important Rules
+
+- ALWAYS read the SKILL.md document before using any skill-related tools
+- If a skill provides scripts, they are located in the \`scripts/\` subdirectory
+- Be explicit about what you're doing and why when using skills
+- Follow the skill usage pattern for best results
 `;
 }
 
@@ -84,13 +99,51 @@ skill documents contain specialized instructions. If you're using a skill ALWAYS
 const runScriptTool = {
 	description: 'Run an executable script from the skills directory',
 	inputSchema: z.object({
-		scriptPath: z.string().startsWith(SKILLS_PATH),
+		scriptPath: z.string().refine(path => {
+			// Normalize path and ensure it's within SKILLS_PATH
+			const normalized = path.replace(/\\/g, '/');
+			return normalized.startsWith(SKILLS_PATH) &&
+				!normalized.includes('../') &&
+				normalized.split('/').length >= 3; // Ensure it's at least skills/<skill>/<folder>/
+		}, {
+			message: "Script path must be within the skills directory"
+		}),
 		args: z.array(z.string()).optional()
 	}),
 	execute: async ({ scriptPath, args = [] }: { scriptPath: string; args?: string[] }) => {
-		const proc = Bun.spawn([scriptPath, ...args]);
-		await proc.exited;
-		return await proc.stdout.text();
+		try {
+			const file = Bun.file(scriptPath);
+			if (!await file.exists()) {
+				return 'Script not found';
+			}
+
+			// Check if file is executable
+			try {
+				await Bun.$`test -x ${scriptPath}`;
+			} catch {
+				return 'Script is not executable';
+			}
+
+			const proc = Bun.spawn([scriptPath, ...args], {
+				timeout: 10000, // 10 second timeout
+				stderr: 'pipe'
+			});
+
+			const [stdout, stderr] = await Promise.all([
+				proc.stdout.text(),
+				proc.stderr.text()
+			]);
+
+			await proc.exited;
+
+			if (proc.exitCode !== 0) {
+				return `Script failed with exit code ${proc.exitCode}: ${stderr}`;
+			}
+
+			return stdout;
+		} catch (error) {
+			return `Error executing script: ${error instanceof Error ? error.message : String(error)}`;
+		}
 	}
 };
 
@@ -119,16 +172,34 @@ const listDirectoryTool = {
 const readFileTool = {
 	description: 'Read the contents of a file at the given path',
 	inputSchema: z.object({
-		filePath: z.string()
+		filePath: z.string().refine(path => {
+			const normalized = path.replace(/\\/g, '/');
+			// Prevent reading sensitive files
+			return !normalized.includes('/.env') &&
+				!normalized.includes('/.git/') &&
+				!normalized.includes('node_modules/') &&
+				!normalized.match(/\.(png|jpg|jpeg|gif|bmp|webp|avif|pdf)$/i);
+		}, {
+			message: "Cannot read that file path"
+		})
 	}),
 	execute: async ({ filePath }: { filePath: string }) => {
-		const file = Bun.file(filePath);
+		try {
+			const file = Bun.file(filePath);
+			if (!await file.exists()) {
+				return 'File not found';
+			}
 
-		if (!await file.exists()) {
-			return 'File not found';
+			// Limit file size to prevent large file reads
+			const size = (file.size);
+			if (size > 1000000) { // 1MB limit
+				return 'File too large to read';
+			}
+
+			return await file.text();
+		} catch (error) {
+			return `Error reading file: ${error instanceof Error ? error.message : String(error)}`;
 		}
-
-		return await file.text();
 	}
 };
 
